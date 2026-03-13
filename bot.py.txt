@@ -4,9 +4,9 @@ from aiogram.filters import Command
 from aiohttp import web
 
 # --- CONFIG (Use Environment Variables on Render) ---
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-SECRET = os.getenv("AD_SECRET", "my_secret") # For hashing rewards
+TOKEN = os.getenv("8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "5401881400"))
+SECRET = os.getenv("AD_SECRET", "verde") # For hashing rewards
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()

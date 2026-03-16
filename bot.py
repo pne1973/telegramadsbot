@@ -1,4 +1,8 @@
-import os, asyncio, aiosqlite, logging, time
+import os
+import asyncio
+import aiosqlite
+import logging
+import time
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
@@ -6,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiohttp import web
 
+# --- CONFIG ---
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5401881400")) 
 REWARD = 0.001 
@@ -48,7 +53,7 @@ async def start(message: types.Message):
     async with aiosqlite.connect("users.db") as db:
         await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
         await db.commit()
-   kb = [[types.KeyboardButton(text="💰 EARN", web_app=types.WebAppInfo(url="https://pne1973.github.io/mini-app/"))],
+    kb = [[types.KeyboardButton(text="💰 EARN", web_app=types.WebAppInfo(url="https://pne1973.github.io/mini-app/"))],
           [types.KeyboardButton(text="💳 BALANCE"), types.KeyboardButton(text="🏦 WITHDRAW")]]
     await message.answer("🚀 **Crypto Earner Bot**\nClick EARN to start.", reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
@@ -56,43 +61,46 @@ async def start(message: types.Message):
 async def balance(message: types.Message):
     async with aiosqlite.connect("users.db") as db:
         async with db.execute("SELECT balance, total_ads FROM users WHERE user_id = ?", (message.from_user.id,)) as cur:
-            bal, ads = await cur.fetchone()
+            res = await cur.fetchone()
+            bal, ads = res if res else (0, 0)
             await message.answer(f"💳 **Balance:** `{bal:.3f} TON`\n📺 **Ads:** `{ads}`")
 
 @dp.message(F.text == "🏦 WITHDRAW")
 async def withdraw_start(message: types.Message, state: FSMContext):
     async with aiosqlite.connect("users.db") as db:
         async with db.execute("SELECT balance FROM users WHERE user_id = ?", (message.from_user.id,)) as cur:
-            bal = (await cur.fetchone())[0]
-            if bal < MIN_WITHDRAW: return await message.answer(f"❌ Min payout: {MIN_WITHDRAW} TON")
-            await message.answer("🏦 Send TON Wallet Address:"); await state.set_state(WithdrawState.waiting_for_address)
+            res = await cur.fetchone()
+            bal = res[0] if res else 0
+            if bal < MIN_WITHDRAW:
+                return await message.answer(f"❌ Min payout: {MIN_WITHDRAW} TON")
+            await message.answer("🏦 Send TON Wallet Address:")
+            await state.set_state(WithdrawState.waiting_for_address)
 
 @dp.message(WithdrawState.waiting_for_address)
 async def withdraw_done(message: types.Message, state: FSMContext):
     wallet, uid = message.text, message.from_user.id
     async with aiosqlite.connect("users.db") as db:
         async with db.execute("SELECT balance FROM users WHERE user_id = ?", (uid,)) as cur:
-            bal = (await cur.fetchone())[0]
+            res = await cur.fetchone()
+            bal = res[0] if res else 0
             await db.execute("INSERT INTO withdrawals (user_id, amount, wallet) VALUES (?, ?, ?)", (uid, bal, wallet))
             await db.execute("UPDATE users SET balance = 0 WHERE user_id = ?", (uid,))
             await db.commit()
     await bot.send_message(ADMIN_ID, f"🔔 **PAYOUT:** {bal} TON to `{wallet}`")
-    await message.answer("✅ Sent! Admin will pay you soon."); await state.clear()
-
-@dp.message(Command("admin_stats"), F.from_user.id == ADMIN_ID)
-async def admin(message: types.Message):
-    async with aiosqlite.connect("users.db") as db:
-        async with db.execute("SELECT COUNT(*), SUM(total_ads) FROM users") as cur:
-            u, a = await cur.fetchone()
-            await message.answer(f"📊 **Stats**\nUsers: {u}\nTotal Ads: {a}")
+    await message.answer("✅ Sent! Admin will pay you soon.")
+    await state.clear()
 
 async def main():
     await init_db()
     app = web.Application()
-    app.router.add_get('/reward', handle_reward); app.router.add_get('/daily', handle_daily)
-    runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', int(os.getenv("PORT", "10000"))).start()
+    app.router.add_get('/reward', handle_reward)
+    app.router.add_get('/daily', handle_daily)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    await web.TCPSite(runner, '0.0.0.0', port).start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())

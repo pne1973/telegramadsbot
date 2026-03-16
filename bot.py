@@ -1,19 +1,24 @@
-import os
-import asyncio
-import logging
-import aiosqlite
-from aiogram import Bot, Dispatcher, types
+import os, asyncio, aiosqlite, logging
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from aiohttp import web
 
 # --- CONFIGURATION ---
-# We use the variable name "BOT_TOKEN". 
-# You will set the actual value inside the Render Dashboard.
+# Set these in your Render Dashboard -> Environment
 TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "5401881400"))
+MIN_WITHDRAW = 5.0  # Minimum TON to request withdrawal
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# 1. Database Initialization
+# States for the Withdrawal Flow
+class WithdrawState(StatesGroup):
+    waiting_for_address = State()
+
+# 1. Database Setup
 async def init_db():
     async with aiosqlite.connect("users.db") as db:
         await db.execute("""
@@ -24,40 +29,28 @@ async def init_db():
         """)
         await db.commit()
 
-# 2. Reward Webhook (Called by your Mini App)
+# 2. Reward Endpoint (Called by Mini App after RichAds)
 async def handle_reward(request):
-    user_id_str = request.query.get("user_id")
-    if not user_id_str:
-        return web.Response(text="Missing user_id", status=400)
+    user_id = request.query.get("user_id")
+    if not user_id: return web.Response(status=400)
     
+    async with aiosqlite.connect("users.db") as db:
+        await db.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
+        await db.execute("UPDATE users SET balance = balance + 0.01 WHERE user_id = ?", (user_id,))
+        await db.commit()
+
     try:
-        user_id = int(user_id_str)
-        async with aiosqlite.connect("users.db") as db:
-            # Add 0.01 TON to user (create user if they don't exist)
-            await db.execute("INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,))
-            await db.execute("UPDATE users SET balance = balance + 0.01 WHERE user_id = ?", (user_id,))
-            await db.commit()
-
-        # Notify the user via the bot
-        await bot.send_message(user_id, "✅ Ad Verified! 0.01 TON has been added to your balance.")
-        return web.Response(text="Success", headers={"Access-Control-Allow-Origin": "*"})
-    
+        await bot.send_message(user_id, "✅ Ad Complete! 0.01 TON added to your balance.")
     except Exception as e:
-        logging.error(f"Reward error: {e}")
-        return web.Response(text="Error", status=500)
+        logging.error(f"Notify error: {e}")
+    
+    return web.Response(text="OK", headers={"Access-Control-Allow-Origin": "*"})
 
-# 3. Health Check (Keeps Render happy)
-async def health_check(request):
-    return web.Response(text="Bot is running!")
-
-# 4. Bot Command Handlers
+# 3. Bot Handlers
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "👋 Welcome to Crypto Earner!\n\n"
-        "Click the button below to watch ads and earn TON. "
-        "Use /balance to check your current earnings."
-    )
+    await message.answer("💰 Welcome! Watch ads in the Mini App to earn TON.\n\n"
+                         "Commands:\n/balance - Check earnings\n/withdraw - Claim your TON")
 
 @dp.message(Command("balance"))
 async def cmd_balance(message: types.Message):
@@ -65,33 +58,62 @@ async def cmd_balance(message: types.Message):
         async with db.execute("SELECT balance FROM users WHERE user_id = ?", (message.from_user.id,)) as cursor:
             row = await cursor.fetchone()
             balance = row[0] if row else 0
-            await message.answer(f"💰 Your Current Balance: {balance:.2f} TON")
+            await message.answer(f"💰 Current Balance: {balance:.2f} TON")
 
-# 5. Main Startup Function
+# --- WITHDRAWAL SYSTEM ---
+@dp.message(Command("withdraw"))
+async def cmd_withdraw(message: types.Message, state: FSMContext):
+    async with aiosqlite.connect("users.db") as db:
+        async with db.execute("SELECT balance FROM users WHERE user_id = ?", (message.from_user.id,)) as cursor:
+            row = await cursor.fetchone()
+            balance = row[0] if row else 0
+
+    if balance < MIN_WITHDRAW:
+        await message.answer(f"❌ Minimum withdrawal is {MIN_WITHDRAW} TON.\nYour balance: {balance:.2f} TON")
+    else:
+        await message.answer("🏦 Please send your **TON Wallet Address** now.")
+        await state.set_state(WithdrawState.waiting_for_address)
+
+@dp.message(WithdrawState.waiting_for_address)
+async def process_withdraw(message: types.Message, state: FSMContext):
+    wallet_address = message.text
+    user_id = message.from_user.id
+
+    async with aiosqlite.connect("users.db") as db:
+        async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            balance = row[0] if row else 0
+
+    if balance >= MIN_WITHDRAW:
+        # Notify Admin (You)
+        await bot.send_message(ADMIN_ID, 
+            f"🔔 **Withdrawal Request!**\nUser: `{user_id}`\nAmount: {balance:.2f} TON\nWallet: `{wallet_address}`")
+        
+        # Reset balance
+        async with aiosqlite.connect("users.db") as db:
+            await db.execute("UPDATE users SET balance = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
+            
+        await message.answer("✅ Request sent! The admin will verify and send your TON soon.")
+    else:
+        await message.answer("❌ Error: Balance updated recently. Try /balance.")
+    
+    await state.clear()
+
+# 4. Startup
 async def main():
     await init_db()
-    
-    # Setup the Web Server for the Mini App to talk to
     app = web.Application()
     app.router.add_get('/reward', handle_reward)
-    app.router.add_get('/', health_check)
+    app.router.add_get('/', lambda r: web.Response(text="Bot is Live"))
     
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    # Render uses the 'PORT' environment variable automatically
-    port = int(os.getenv("PORT", "10000"))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv("PORT", "10000")))
     await site.start()
     
-    logging.info(f"Web server started on port {port}")
-    
-    # Start bot polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot stopped")
+    asyncio.run(main())

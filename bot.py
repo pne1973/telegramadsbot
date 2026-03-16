@@ -1,3 +1,5 @@
+from aiohttp import web
+import sqlite3 # Or whatever database you are currently using
 import os, asyncio, aiosqlite, hashlib
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -37,6 +39,26 @@ async def start(message: types.Message):
     await message.answer("💰 Welcome! Use the Web App to earn TON.")
 
 # --- STARTUP LOGIC ---
+async def handle_reward(request):
+    user_id = request.query.get("user_id")
+    if not user_id:
+        return web.Response(text="No User ID", status=400)
+
+    # --- YOUR CUSTOM DATABASE CODE GOES HERE ---
+    # Example: If you use SQLite, update the balance
+    # conn = sqlite3.connect("your_database.db")
+    # cursor = conn.cursor()
+    # cursor.execute("UPDATE users SET balance = balance + 0.01 WHERE id = ?", (user_id,))
+    # conn.commit()
+    # ------------------------------------------
+
+    # Send a message to the user confirming payment
+    try:
+        await bot.send_message(user_id, "✅ Ad Complete! 0.01 TON added to your balance.")
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+    return web.Response(text="OK", headers={"Access-Control-Allow-Origin": "*"})
 async def main():
     await init_db()
     

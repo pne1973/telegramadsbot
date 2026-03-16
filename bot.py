@@ -48,7 +48,7 @@ async def start(message: types.Message):
     async with aiosqlite.connect("users.db") as db:
         await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
         await db.commit()
-    kb = [[types.KeyboardButton(text="💰 EARN", web_app=types.WebAppInfo(url="https://pne1973.github.io"))],
+   kb = [[types.KeyboardButton(text="💰 EARN", web_app=types.WebAppInfo(url="https://pne1973.github.io/mini-app/"))],
           [types.KeyboardButton(text="💳 BALANCE"), types.KeyboardButton(text="🏦 WITHDRAW")]]
     await message.answer("🚀 **Crypto Earner Bot**\nClick EARN to start.", reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 

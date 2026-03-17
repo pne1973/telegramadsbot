@@ -5,6 +5,9 @@ from flask_cors import CORS
 from datetime import datetime
 
 app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Server is Awake!", 200
 CORS(app)
 
 # ================= CONFIGURATION =================

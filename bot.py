@@ -45,12 +45,17 @@ def send_welcome(chat_id):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    print(f"Incoming: {data}") # ADD THIS LINE to see logs in Render
+    # This line will show exactly what Telegram sends in your Render Logs
+    print(f"DEBUG: Received update: {data}") 
+    
     if "message" in data:
-        text = data["message"].get("text", "")
         chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+        
         if "/start" in text:
+            print(f"DEBUG: Sending welcome to {chat_id}")
             send_welcome(chat_id)
+            
     return "OK", 200
 
 @app.route('/get_user_info')

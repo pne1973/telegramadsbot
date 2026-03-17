@@ -45,10 +45,12 @@ def send_welcome(chat_id):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
+    print(f"Incoming: {data}") # ADD THIS LINE to see logs in Render
     if "message" in data:
         text = data["message"].get("text", "")
         chat_id = data["message"]["chat"]["id"]
-        if "/start" in text: send_welcome(chat_id)
+        if "/start" in text:
+            send_welcome(chat_id)
     return "OK", 200
 
 @app.route('/get_user_info')

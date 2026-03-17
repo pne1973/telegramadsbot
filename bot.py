@@ -21,13 +21,13 @@ def send_welcome(chat_id):
     payload = {
         "chat_id": chat_id,
         "text": (
-            "💎 *Welcome to MyEarn TON Pro!*\\n\\n"
+            "💎 *Welcome to MyEarn TON Pro!*\n\n"
             "The #1 platform to earn TON by completing simple tasks. "
-            "Watch ads, invite friends, and grow your balance!\\n\\n"
-            "📊 *Earnings:*\\n"
-            "• 0.0002 TON per Ad View\\n"
-            "• 0.0005 TON Daily Login\\n"
-            "• 0.0050 TON per Referral\\n\\n"
+            "Watch ads, invite friends, and grow your balance!\n\n"
+            "📊 *Earnings:*\n"
+            "• 0.0002 TON per Ad View\n"
+            "• 0.0005 TON Daily Login\n"
+            "• 0.0050 TON per Referral\n\n"
             "Ready to start? Click below! 👇"
         ),
         "parse_mode": "Markdown",
@@ -39,9 +39,7 @@ def send_welcome(chat_id):
             ]
         }
     }
-    response = requests.post(url, json=payload)
-    # THIS LINE IS KEY: It will print the error from Telegram in your Render logs
-    print(f"TELEGRAM RESPONSE: {response.status_code} - {response.text}")
+    requests.post(url, json=payload)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():

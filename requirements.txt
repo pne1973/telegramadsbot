@@ -1,4 +1,3 @@
-aiogram
-aiosqlite
-aiohttp
+flask
+flask-cors
 gunicorn

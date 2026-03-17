@@ -8,16 +8,9 @@ app = Flask(__name__)
 CORS(app)
 
 # ================= CONFIGURATION =================
-# 1. Get this from @BotFather
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc" 
-
-# 2. Your GitHub Pages link (e.g., https://username.github.io/repo/)
 WEB_APP_URL = "https://pne1973.github.io/mini-app/"
-
-# 3. Your personal username for support
 ADMIN_HANDLE = "@pine1971" 
-
-# 4. For marking payouts as paid
 ADMIN_PASSWORD = "sporting" 
 # =================================================
 
@@ -32,24 +25,22 @@ def send_welcome(chat_id):
             "The #1 platform to earn TON by completing simple tasks. "
             "Watch ads, invite friends, and grow your balance!\\n\\n"
             "📊 *Earnings:*\\n"
-            "• 0.0002 TON per Ad\\n"
-            "• 0.0050 TON per Referral\\n"
-            "• 1.0000 TON Min Payout\\n\\n"
+            "• 0.0002 TON per Ad View\\n"
+            "• 0.0005 TON Daily Login\\n"
+            "• 0.0050 TON per Referral\\n\\n"
             "Ready to start? Click below! 👇"
         ),
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [
                 [{"text": "🚀 OPEN MINI APP", "web_app": {"url": WEB_APP_URL}}],
-                [{"text": "👥 Referral Link", "switch_inline_query": "Join and earn!"},
+                [{"text": "👥 Invite Friends", "switch_inline_query": "I am earning TON here! Join me:"},
                  {"text": "💬 Support", "url": f"https://t.me/{ADMIN_HANDLE}"}]
             ]
         }
     }
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Error sending welcome: {e}")
+    try: requests.post(url, json=payload)
+    except: pass
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -57,25 +48,20 @@ def webhook():
     if "message" in data:
         text = data["message"].get("text", "")
         chat_id = data["message"]["chat"]["id"]
-        if "/start" in text:
-            send_welcome(chat_id)
+        if "/start" in text: send_welcome(chat_id)
     return "OK", 200
 
-# --- APP LOGIC ---
 @app.route('/get_user_info')
 def info():
     uid = request.args.get('user_id')
     ref_by = request.args.get('ref_by')
     today = datetime.now().strftime("%Y-%m-%d")
-    
     if uid not in db:
-        db[uid] = {"bal": 0.0, "daily_count": 0, "last_claim": today, "refs": 0, "ad_total": 0, "ref_by": ref_by, "bonus_paid": False, "payouts": []}
-    
+        db[uid] = {"bal": 0.0, "daily_count": 0, "last_claim": today, "last_daily": "", "refs": 0, "ad_total": 0, "ref_by": ref_by, "bonus_paid": False, "payouts": []}
     if db[uid]["last_claim"] != today:
         db[uid]["daily_count"] = 0
         db[uid]["last_claim"] = today
-            
-    return jsonify({"bal": float(f"{db[uid]['bal']:.4f}"), "daily_count": db[uid]["daily_count"], "refs": db[uid]["refs"], "payouts": db[uid]["payouts"][-3:]})
+    return jsonify({"bal": float(f"{db[uid]['bal']:.4f}"), "daily_count": db[uid]["daily_count"], "refs": db[uid]["refs"], "payouts": db[uid]["payouts"][-3:], "can_daily": db[uid]["last_daily"] != today})
 
 @app.route('/reward')
 def reward():
@@ -85,16 +71,24 @@ def reward():
         db[uid]["bal"] += 0.0002
         db[uid]["daily_count"] += 1
         db[uid]["ad_total"] += 1
-        
-        # Anti-Fraud Ref Bonus
         ref_id = db[uid].get("ref_by")
         if ref_id and ref_id in db and db[uid]["ad_total"] == 5 and not db[uid]["bonus_paid"]:
             db[ref_id]["bal"] += 0.005
             db[ref_id]["refs"] += 1
             db[uid]["bonus_paid"] = True
-            
         return jsonify({"status": "ok", "new_bal": f"{db[uid]['bal']:.4f}"})
     return jsonify({"error": "Error"}), 404
+
+@app.route('/daily_claim')
+def daily_claim():
+    uid = request.args.get('user_id')
+    today = datetime.now().strftime("%Y-%m-%d")
+    if uid in db:
+        if db[uid].get("last_daily") == today: return jsonify({"error": "Already claimed"}), 400
+        db[uid]["bal"] += 0.0005
+        db[uid]["last_daily"] = today
+        return jsonify({"status": "ok", "new_bal": f"{db[uid]['bal']:.4f}"})
+    return jsonify({"error": "User not found"}), 404
 
 @app.route('/withdraw', methods=['POST'])
 def withdraw():
@@ -104,7 +98,6 @@ def withdraw():
         amt = db[uid]["bal"]
         db[uid]["bal"] = 0 
         db[uid]["payouts"].append({"amt": float(f"{amt:.4f}"), "status": "Pending", "date": datetime.now().strftime("%b %d")})
-        print(f"💰 PAYOUT: {uid} | {wallet} | {amt}")
         return jsonify({"status": "success"})
     return jsonify({"error": "Min 1.0 TON"}), 400
 

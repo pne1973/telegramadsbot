@@ -39,8 +39,9 @@ def send_welcome(chat_id):
             ]
         }
     }
-    try: requests.post(url, json=payload)
-    except: pass
+    response = requests.post(url, json=payload)
+    # THIS LINE IS KEY: It will print the error from Telegram in your Render logs
+    print(f"TELEGRAM RESPONSE: {response.status_code} - {response.text}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():

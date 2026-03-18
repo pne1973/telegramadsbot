@@ -8,6 +8,7 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIG ---
+# Ensure these are set in your Render Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -28,7 +29,9 @@ def webhook():
 
         res = supabase.table("users").select("*").eq("uid", uid).execute()
         if not res.data:
-            supabase.table("users").insert({"uid": uid, "bal": 0.0, "referrals_count": 0, "weekly_refs": 0, "referred_by": ref_by}).execute()
+            supabase.table("users").insert({
+                "uid": uid, "bal": 0.0, "referrals_count": 0, "weekly_refs": 0, "referred_by": ref_by
+            }).execute()
             if ref_by and ref_by != uid:
                 r = supabase.table("users").select("*").eq("uid", ref_by).execute()
                 if r.data:
@@ -37,7 +40,9 @@ def webhook():
                         "referrals_count": r.data[0]['referrals_count'] + 1,
                         "weekly_refs": r.data[0]['weekly_refs'] + 1
                     }).eq("uid", ref_by).execute()
-                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": ref_by, "text": "👥 New Referral! Your weekly score increased!"})
+                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+                        "chat_id": ref_by, "text": "👥 New Referral! Your weekly score increased!"
+                    })
 
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
             "chat_id": uid, "text": "💎 *Welcome to MyEarn TON V4*", "parse_mode": "Markdown",
@@ -45,12 +50,23 @@ def webhook():
         })
     return "OK", 200
 
+@app.route('/check_eligibility')
+def check_eligibility():
+    uid = request.args.get('user_id')
+    u = supabase.table("users").select("*").eq("uid", uid).execute().data
+    if not u: return jsonify({"bal": 0, "streak_days": 0, "ref_count": 0})
+    return jsonify({
+        "bal": u[0]['bal'],
+        "streak_days": u[0].get('streak_days', 0),
+        "ref_count": u[0].get('referrals_count', 0)
+    })
+
 @app.route('/reward_spin')
 def reward_spin():
     uid = request.args.get('user_id')
     u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
     roll = random.random()
-    # Logic: 80% small, 15% medium, 5% Jackpot
+    # 80% small, 15% medium, 5% Jackpot
     win = 0.0001 if roll < 0.8 else 0.0005 if roll < 0.95 else 0.0025
     new_bal = u['bal'] + win
     supabase.table("users").update({"bal": new_bal}).eq("uid", uid).execute()
@@ -61,9 +77,9 @@ def daily_claim():
     uid = request.args.get('user_id')
     u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
     now = datetime.now()
-    if u['last_checkin']:
+    if u.get('last_checkin'):
         last = datetime.fromisoformat(u['last_checkin'].replace('Z', '+00:00'))
-        if now - last < timedelta(hours=24): return jsonify({"error": "Wait 24h"}), 400
+        if now - last < timedelta(hours=24): return jsonify({"error": "Already claimed! Come back in 24h."}), 400
         streak = u['streak_days'] + 1 if now - last < timedelta(hours=48) else 1
     else: streak = 1
     
@@ -77,5 +93,11 @@ def ref_leaderboard():
     res = supabase.table("users").select("uid", "weekly_refs").order("weekly_refs", desc=True).limit(5).execute().data
     return jsonify([{"name": str(u['uid'])[:4]+"***", "count": u['weekly_refs']} for u in res])
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+@app.route('/withdraw', methods=['POST'])
+def withdraw():
+    data = request.get_json()
+    uid, addr = str(data.get('user_id')), data.get('address')
+    u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
+    if u['bal'] < MIN_WITHDRAW: return jsonify({"error": f"Min {MIN_WITHDRAW} TON"}), 400
+    
+    supabase.table("withdrawals").insert({"uid": uid, "address": addr, "amount": u['bal'], "status": "

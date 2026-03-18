@@ -5,7 +5,12 @@ from datetime import datetime
 from supabase import create_client, Client
 
 app = Flask(__name__)
-CORS(app)
+
+@app.route('/')
+def home():
+    return "Bot is Running!", 200  # <--- Render needs this to pass the health check
+
+# ... rest of your code ...
 
 # ================= CONFIGURATION =================
 # Replace 'YOUR_ANON_KEY' with the key from Supabase Settings -> API

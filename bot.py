@@ -1,129 +1,93 @@
-import os
-import sqlite3
-import requests
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from datetime import datetime
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MyEarn TON Pro</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <style>
+        :root { --bg: #0b0f14; --card: #1c222b; --blue: #0088cc; --green: #28a745; --text-dim: #818d99; --gold: #ffaa00; } [cite: 12, 13]
+        * { box-sizing: border-box; margin: 0; padding: 0; } [cite: 14]
+        body { background: var(--bg); color: #fff; font-family: sans-serif; display: flex; justify-content: center; min-height: 100vh; padding: 20px 16px; } [cite: 15, 16]
+        .app-container { width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; } [cite: 17]
+        .glass-card { background: var(--card); padding: 24px; border-radius: 24px; margin-bottom: 16px; width: 100%; text-align: center; } [cite: 18, 19]
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; background: rgba(0,0,0,0.3); padding: 5px; border-radius: 16px; width: 100%; } [cite: 20, 21]
+        .tab { flex: 1; padding: 12px; border-radius: 12px; background: transparent; border: none; color: var(--text-dim); font-weight: bold; cursor: pointer; } [cite: 22, 23]
+        .tab.active { background: var(--blue); color: #fff; } [cite: 24]
+        .btn { display: block; width: 100%; padding: 18px; border-radius: 16px; font-weight: bold; border: none; cursor: pointer; color: #fff; text-align: center; margin-bottom: 10px; } [cite: 25, 26]
+        .btn-blue { background: var(--blue); } [cite: 27]
+        .btn-green { background: var(--green); } [cite: 28]
+        .tab-content { display: none; width: 100%; } [cite: 30]
+        .tab-content.active { display: block; } [cite: 31]
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('earn')">Earn</button>
+        <button class="tab" onclick="showTab('wallet')">Wallet</button>
+    </div>
 
-app = Flask(__name__)
-CORS(app)
+    <div id="earn" class="tab-content active">
+        <div class="glass-card">
+            <h2 id="balance" style="color: var(--gold)">0.0000 TON</h2>
+            <p style="color: var(--text-dim)">Ready to claim</p>
+        </div>
+        <button class="btn btn-blue" onclick="handleClaim()">Claim Rewards</button>
+        
+        <div class="glass-card" style="margin-top: 20px;">
+            <h3>Refer & Earn</h3>
+            <p style="color: var(--text-dim); font-size: 13px;">Get 0.005 TON for every active friend.</p>
+            <button class="btn btn-green" onclick="shareReferral()">Invite Friend</button>
+        </div>
+    </div>
 
-# ================= CONFIGURATION =================
-BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc" 
-WEB_APP_URL = "https://pne1973.github.io/mini-app/"
-ADMIN_HANDLE = "@pine1971" 
-ADMIN_PASSWORD = "sporting" 
-DB_FILE = "database.db"
-# =================================================
+    <div id="wallet" class="tab-content">
+        <div class="glass-card">
+            <p>Withdrawal Minimum: 1.0 TON</p>
+        </div>
+        <button class="btn btn-green">Connect Wallet</button>
+    </div>
+</div>
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    # Create tables for persistent storage
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (uid TEXT PRIMARY KEY, bal REAL, daily_count INTEGER, 
-                  last_claim TEXT, last_daily TEXT, refs INTEGER, 
-                  ad_total INTEGER, ref_by TEXT, bonus_paid INTEGER)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS payouts
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, 
-                  amt REAL, status TEXT, date TEXT)''')
-    conn.commit()
-    conn.close()
+<script>
+    const tg = window.Telegram.WebApp;
+    tg.expand(); [cite: 33]
+    const API_URL = "https://your-render-url.onrender.com"; // REPLACE THIS
+    const userId = tg.initDataUnsafe?.user?.id;
 
-init_db()
+    async function loadData() {
+        const startParam = tg.initDataUnsafe?.start_param;
+        const res = await fetch(`${API_URL}/get_user_info?user_id=${userId}&ref_by=${startParam || ''}`);
+        const data = await res.json();
+        document.getElementById('balance').innerText = `${data.bal} TON`;
+    }
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def send_welcome(chat_id):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": (
-            "💎 *Welcome to MyEarn TON Pro!*\n\n"
-            "The #1 platform to earn TON by completing simple tasks. [cite: 2]\n\n"
-            "📊 *Earnings:*\n"
-            "• 0.0002 TON per Ad View\n"
-            "• 0.0005 TON Daily Login\n"
-            "• 0.0050 TON per Referral\n\n"
-            "Ready to start? Click below! 👇 [cite: 3]"
-        ),
-        "parse_mode": "Markdown",
-        "reply_markup": {
-            "inline_keyboard": [
-                [{"text": "🚀 OPEN MINI APP", "web_app": {"url": WEB_APP_URL}}],
-                [{"text": "👥 Invite Friends", "switch_inline_query": "I am earning TON here! Join me: [cite: 4]"}],
-                [{"text": "💬 Support", "url": f"https://t.me/{ADMIN_HANDLE}"}]
-            ]
+    async function handleClaim() {
+        const res = await fetch(`${API_URL}/reward?user_id=${userId}`);
+        const data = await res.json();
+        if (data.status === "ok") {
+            document.getElementById('balance').innerText = `${data.new_bal} TON`;
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } }); [cite: 37]
+        } else {
+            tg.showAlert("Daily limit reached!");
         }
     }
-    requests.post(url, json=payload)
 
-@app.route('/get_user_info')
-def info():
-    uid = request.args.get('user_id')
-    ref_by = request.args.get('ref_by')
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE uid = ?', (uid,)).fetchone()
-    
-    if not user:
-        # Create new user and track referral [cite: 6]
-        conn.execute('''INSERT INTO users (uid, bal, daily_count, last_claim, last_daily, refs, ad_total, ref_by, bonus_paid) 
-                        VALUES (?, 0.0, 0, ?, "", 0, 0, ?, 0)''', (uid, today, ref_by))
-        conn.commit()
-        user = conn.execute('SELECT * FROM users WHERE uid = ?', (uid,)).fetchone()
+    function shareReferral() {
+        const botLink = `https://t.me/MyEarnTonBot?start=${userId}`;
+        tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=Earn%20TON%20with%20me!`);
+    }
 
-    if user['last_claim'] != today:
-        conn.execute('UPDATE users SET daily_count = 0, last_claim = ? WHERE uid = ?', (today, uid))
-        conn.commit()
+    function showTab(tabId) {
+        document.querySelectorAll('.tab, .tab-content').forEach(el => el.classList.remove('active')); [cite: 34]
+        event.currentTarget.classList.add('active');
+        document.getElementById(tabId).classList.add('active'); [cite: 35]
+        if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light'); [cite: 36]
+    }
 
-    payouts = conn.execute('SELECT amt, status, date FROM payouts WHERE uid = ? ORDER BY id DESC LIMIT 3', (uid,)).fetchall()
-    conn.close()
-
-    return jsonify({
-        "bal": round(user['bal'], 4),
-        "daily_count": user['daily_count'],
-        "refs": user['refs'],
-        "can_daily": user['last_daily'] != today,
-        "payouts": [dict(p) for p in payouts]
-    })
-
-@app.route('/reward')
-def reward():
-    uid = request.args.get('user_id')
-    conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE uid = ?', (uid,)).fetchone()
-    
-    if not user: return jsonify({"error": "User not found"}), 404
-    if user['daily_count'] >= 15: return jsonify({"error": "Limit"}), 400 [cite: 7]
-
-    new_bal = user['bal'] + 0.0002
-    new_ad_total = user['ad_total'] + 1
-    
-    conn.execute('UPDATE users SET bal = ?, daily_count = daily_count + 1, ad_total = ? WHERE uid = ?', (new_bal, new_ad_total, uid))
-    
-    # Referral bonus logic: Paid after 5 ads watched [cite: 8]
-    if user['ref_by'] and new_ad_total == 5 and not user['bonus_paid']:
-        conn.execute('UPDATE users SET bal = bal + 0.005, refs = refs + 1 WHERE uid = ?', (user['ref_by'],))
-        conn.execute('UPDATE users SET bonus_paid = 1 WHERE uid = ?', (uid,))
-        
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "ok", "new_bal": f"{new_bal:.4f}"})
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.json
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"] [cite: 5]
-        text = data["message"].get("text", "")
-        if "/start" in text:
-            send_welcome(chat_id)
-    return "OK", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    loadData();
+</script>
+</body>
+</html>

@@ -50,7 +50,7 @@ def send_welcome(chat_id, ref_id):
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [[
-                {"text": "🚀 Open Mini App", "web_app": {"url": webapp_url}}
+                {"text": "🚀 Open Mini App", "web_app": {"https://pne1973.github.io/mini-app/": webapp_url}}
             ]]
         }
     }

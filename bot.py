@@ -18,6 +18,21 @@ BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
 # =================================================
 
 @app.route('/')
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    # 1. Get the data from Telegram
+    update = request.get_json()
+    
+    # 2. Check if it's a message
+    if "message" in update:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"].get("text", "")
+
+        # 3. If they typed /start, send the welcome menu
+        if text == "/start":
+            send_welcome(chat_id)
+            
+    return "OK", 200
 def home():
     # Render needs this to see the app is "Alive" and pass the health check
     return "MyEarn TON Server is Active", 200

@@ -10,7 +10,7 @@ CORS(app)
 supabase: Client = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
 CHANNEL_ID = "-1003836027199"
-ADMIN_ID = "5401881400" 
+ADMIN_ID = "5401881400"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -21,7 +21,6 @@ def webhook():
         text = msg.get("text", "")
         ref_by = text.split(" ")[1] if text.startswith("/start ") and len(text.split(" ")) > 1 else None
         
-        # User Registration & Referral
         res = supabase.table("users").select("*").eq("uid", uid).execute()
         if not res.data:
             supabase.table("users").insert({"uid": uid, "bal": 0.0, "referred_by": ref_by}).execute()
@@ -31,22 +30,10 @@ def webhook():
                     supabase.table("users").update({"bal": r.data[0]['bal'] + 0.001, "referrals_count": r.data[0]['referrals_count'] + 1}).eq("uid", ref_by).execute()
 
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-            "chat_id": uid, "text": "🚀 *Welcome!*\nEarn TON by watching ads and inviting friends.", "parse_mode": "Markdown",
+            "chat_id": uid, "text": "🚀 *Welcome!*\nStart earning TON now.", "parse_mode": "Markdown",
             "reply_markup": {"inline_keyboard": [[{"text": "🚀 Open App", "web_app": {"url": "https://pne1973.github.io/mini-app/"}}]]}
         })
     return "OK", 200
-
-@app.route('/broadcast', methods=['POST'])
-def broadcast():
-    data = request.get_json()
-    if str(data.get("admin_id")) != ADMIN_ID: return jsonify({"error": "Unauthorized"}), 403
-    users = supabase.table("users").select("uid").execute().data
-    count = 0
-    for u in users:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": u['uid'], "text": data.get("message"), "parse_mode": "Markdown"})
-        count += 1
-        if count % 20 == 0: time.sleep(1) # Anti-flood delay
-    return jsonify({"total": count})
 
 @app.route('/check_eligibility')
 def check_eligibility():
@@ -60,6 +47,42 @@ def check_eligibility():
     bal = u[0]['bal'] if u else 0.0
     refs = u[0]['referrals_count'] if u else 0
     return jsonify({"bal": bal, "is_subbed": is_subbed, "ref_count": refs, "eligible": (is_subbed and refs >= 3)})
+
+@app.route('/withdraw', methods=['POST'])
+def withdraw():
+    data = request.get_json()
+    uid = str(data.get('user_id'))
+    addr = data.get('address')
+    u = supabase.table("users").select("bal").eq("uid", uid).execute().data
+    if not u or u[0]['bal'] < 0.001:
+        return jsonify({"error": "Insufficient Balance (Min 0.001)"}), 400
+    
+    # Save withdrawal request and reset balance
+    amount = u[0]['bal']
+    supabase.table("withdrawals").insert({"uid": uid, "address": addr, "amount": amount}).execute()
+    supabase.table("users").update({"bal": 0.0}).eq("uid", uid).execute()
+    
+    # Notify Admin (You)
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+        "chat_id": ADMIN_ID, "text": f"💰 *NEW WITHDRAWAL*\nUser: `{uid}`\nAmount: {amount} TON\nAddress: `{addr}`", "parse_mode": "Markdown"
+    })
+    return jsonify({"status": "ok"})
+
+@app.route('/history')
+def history():
+    uid = request.args.get('user_id')
+    res = supabase.table("withdrawals").select("*").eq("uid", uid).order("created_at", desc=True).execute().data
+    return jsonify(res)
+
+@app.route('/broadcast', methods=['POST'])
+def broadcast():
+    data = request.get_json()
+    if str(data.get("admin_id")) != ADMIN_ID: return jsonify({"error": "No"}), 403
+    users = supabase.table("users").select("uid").execute().data
+    for u in users:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": u['uid'], "text": data.get("message"), "parse_mode": "Markdown"})
+        time.sleep(0.05)
+    return jsonify({"total": len(users)})
 
 @app.route('/reward')
 def reward():

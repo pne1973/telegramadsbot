@@ -8,14 +8,12 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIG ---
-# Ensure these are set in your Render Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
 ADMIN_ID = "5401881400"
-CHANNEL_ID = "-1003836027199"
 MIN_WITHDRAW = 0.05 
 
 @app.route('/webhook', methods=['POST'])
@@ -66,7 +64,6 @@ def reward_spin():
     uid = request.args.get('user_id')
     u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
     roll = random.random()
-    # 80% small, 15% medium, 5% Jackpot
     win = 0.0001 if roll < 0.8 else 0.0005 if roll < 0.95 else 0.0025
     new_bal = u['bal'] + win
     supabase.table("users").update({"bal": new_bal}).eq("uid", uid).execute()
@@ -100,4 +97,14 @@ def withdraw():
     u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
     if u['bal'] < MIN_WITHDRAW: return jsonify({"error": f"Min {MIN_WITHDRAW} TON"}), 400
     
-    supabase.table("withdrawals").insert({"uid": uid, "address": addr, "amount": u['bal'], "status": "
+    supabase.table("withdrawals").insert({"uid": uid, "address": addr, "amount": u['bal'], "status": "Pending"}).execute()
+    supabase.table("users").update({"bal": 0.0}).eq("uid", uid).execute()
+    
+    # Notify Admin
+    msg = f"💰 *NEW WITHDRAWAL*\nUser: `{uid}`\nAmt: {u['bal']:.4f} TON\nAddr: `{addr}`"
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": ADMIN_ID, "text": msg, "parse_mode": "Markdown"})
+    
+    return jsonify({"status": "ok"})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)

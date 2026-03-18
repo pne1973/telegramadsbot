@@ -14,85 +14,46 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
 ADMIN_ID = "5401881400"
-CHANNEL_ID = "-1003836027199" # Your Channel ID
+CHANNEL_ID = "-1003836027199"
 MIN_WITHDRAW = 0.05 
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.get_json(force=True)
-    if "message" in data:
-        msg = data["message"]
-        uid = str(msg["from"]["id"])
-        text = msg.get("text", "")
-        ref_by = text.split(" ")[1] if text.startswith("/start ") and len(text.split(" ")) > 1 else None
-
-        res = supabase.table("users").select("*").eq("uid", uid).execute()
-        if not res.data:
-            supabase.table("users").insert({
-                "uid": uid, "bal": 0.0, "referrals_count": 0, "weekly_refs": 0, "referred_by": ref_by
-            }).execute()
-            if ref_by and ref_by != uid:
-                r = supabase.table("users").select("*").eq("uid", ref_by).execute()
-                if r.data:
-                    supabase.table("users").update({
-                        "bal": r.data[0]['bal'] + 0.001,
-                        "referrals_count": r.data[0]['referrals_count'] + 1,
-                        "weekly_refs": r.data[0]['weekly_refs'] + 1
-                    }).eq("uid", ref_by).execute()
-                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": ref_by, "text": "👥 New Referral! +0.001 TON"})
-
-        welcome = "💎 *Welcome to MyEarn TON V5*\n\nWatch ads, complete tasks, and withdraw real TON!"
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-            "chat_id": uid, "text": welcome, "parse_mode": "Markdown",
-            "reply_markup": {"inline_keyboard": [[{"text": "🚀 Open App", "web_app": {"url": "https://pne1973.github.io/mini-app/"}}]]}
-        })
-    return "OK", 200
+REF_REQUIRED = 3  # <--- RESTORED REQUIREMENT
 
 @app.route('/check_eligibility')
 def check_eligibility():
     uid = request.args.get('user_id')
-    u = supabase.table("users").select("*").eq("uid", uid).execute().data
-    if not u: return jsonify({"bal": 0, "streak_days": 0, "joined_channel": False})
-    return jsonify({"bal": u[0]['bal'], "streak_days": u[0].get('streak_days', 0), "joined_channel": u[0].get('joined_channel', False)})
-
-@app.route('/reward_spin')
-def reward_spin():
-    uid = request.args.get('user_id')
-    u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
-    win = 0.0001 if random.random() < 0.8 else 0.0005 if random.random() < 0.95 else 0.0025
-    new_bal = u['bal'] + win
-    supabase.table("users").update({"bal": new_bal}).eq("uid", uid).execute()
-    return jsonify({"new_bal": new_bal, "win": win})
-
-@app.route('/verify_channel')
-def verify_channel():
-    uid = request.args.get('user_id')
     u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
-    if u.get('joined_channel'): return jsonify({"error": "Already claimed!"}), 400
     
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={uid}"
-    r = requests.get(url).json()
-    status = r.get("result", {}).get("status")
-    if status in ['member', 'administrator', 'creator']:
-        new_bal = u['bal'] + 0.005
-        supabase.table("users").update({"bal": new_bal, "joined_channel": True}).eq("uid", uid).execute()
-        return jsonify({"new_bal": new_bal, "msg": "Success! +0.005 TON"})
-    return jsonify({"error": "Please join the channel first!"}), 400
+    # Check if energy needs reset (24h)
+    now = datetime.now()
+    last_reset = datetime.fromisoformat(u['last_energy_reset'].replace('Z', '+00:00'))
+    energy = u['energy']
+    if now - last_reset > timedelta(hours=24):
+        energy = 10
+        supabase.table("users").update({"energy": 10, "last_energy_reset": now.isoformat()}).eq("uid", uid).execute()
+
+    return jsonify({
+        "bal": u['bal'],
+        "energy": energy,
+        "is_vip": u.get('is_vip', False),
+        "ref_count": u.get('referrals_count', 0),
+        "joined_channel": u.get('joined_channel', False),
+        "streak": u.get('streak_days', 0)
+    })
 
 @app.route('/withdraw', methods=['POST'])
 def withdraw():
     data = request.get_json()
     uid, addr = str(data.get('user_id')), data.get('address')
-    u = supabase.table("users").select("bal").eq("uid", uid).execute().data[0]
-    if u['bal'] < MIN_WITHDRAW: return jsonify({"error": f"Min {MIN_WITHDRAW} TON"}), 400
+    u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
+    
+    # SECURITY CHECKS
+    if u['referrals_count'] < REF_REQUIRED:
+        return jsonify({"error": f"Locked! You need {REF_REQUIRED} referrals to withdraw."}), 403
+    if u['bal'] < MIN_WITHDRAW:
+        return jsonify({"error": f"Min {MIN_WITHDRAW} TON required."}), 400
+    
     supabase.table("withdrawals").insert({"uid": uid, "address": addr, "amount": u['bal'], "status": "Pending"}).execute()
     supabase.table("users").update({"bal": 0.0}).eq("uid", uid).execute()
     return jsonify({"status": "ok"})
 
-@app.route('/referral_leaderboard')
-def ref_leaderboard():
-    res = supabase.table("users").select("uid", "weekly_refs").order("weekly_refs", desc=True).limit(5).execute().data
-    return jsonify([{"name": str(u['uid'])[:4]+"***", "count": u['weekly_refs']} for u in res])
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# ... (Keep existing /reward_spin, /daily_claim, and /verify_channel from previous steps)

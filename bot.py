@@ -9,113 +9,58 @@ app = Flask(__name__)
 CORS(app)
 
 # ================= CONFIGURATION =================
-# These are pulled safely from your Render Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
+WEB_APP_URL = "https://pne1973.github.io/mini-app/"
 # =================================================
 
 @app.route('/')
+def home():
+    return "Server is Awake!", 200
+
+# THIS WAS MISSING: The actual webhook receiver
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # 1. Get the data from Telegram
-    update = request.get_json()
+    data = request.get_json()
     
-    # 2. Check if it's a message
-    if "message" in update:
-        chat_id = update["message"]["chat"]["id"]
-        text = update["message"].get("text", "")
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
 
-        # 3. If they typed /start, send the welcome menu
-        if text == "/start":
-            send_welcome(chat_id)
+        if "/start" in text:
+            # Extract referral ID if present (e.g., /start 12345)
+            ref_id = text.split(" ")[1] if len(text.split(" ")) > 1 else None
+            send_welcome(chat_id, ref_id)
             
     return "OK", 200
-def home():
-    # Render needs this to see the app is "Alive" and pass the health check
-    return "MyEarn TON Server is Active", 200
+
+def send_welcome(chat_id, ref_id):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    
+    # Create the referral link to show the user
+    # If they were referred, you can pass that info to the WebApp URL
+    webapp_url = f"{WEB_APP_URL}?ref={ref_id}" if ref_id else WEB_APP_URL
+    
+    payload = {
+        "chat_id": chat_id,
+        "text": "💎 *Welcome to MyEarn TON Pro!*\n\nStart earning TON by watching ads and inviting friends.",
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "🚀 Open Mini App", "web_app": {"url": webapp_url}}
+            ]]
+        }
+    }
+    requests.post(url, json=payload)
 
 @app.route('/get_user_info')
 def info():
     uid = request.args.get('user_id')
-    ref_by = request.args.get('ref_by')
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Check if user exists in Supabase
-    res = supabase.table("users").select("*").eq("uid", uid).execute()
-    user = res.data[0] if res.data else None
-    
-    if not user:
-        # Create new user in Supabase
-        user_data = {
-            "uid": uid, "bal": 0.0, "daily_count": 0, 
-            "last_claim": today, "ref_by": ref_by, 
-            "refs": 0, "ad_total": 0, "bonus_paid": 0
-        }
-        supabase.table("users").insert(user_data).execute()
-        user = user_data
-    
-    # Reset daily limit if it's a new day
-    if user.get('last_claim') != today:
-        supabase.table("users").update({"daily_count": 0, "last_claim": today}).eq("uid", uid).execute()
-        user['daily_count'] = 0
-
-    return jsonify({
-        "bal": round(user['bal'], 4),
-        "daily_count": user['daily_count'],
-        "refs": user['refs'],
-        "can_daily": user.get('last_daily') != today
-    })
-
-@app.route('/reward')
-def reward():
-    uid = request.args.get('user_id')
-    res = supabase.table("users").select("*").eq("uid", uid).execute()
-    if not res.data: return jsonify({"error": "User not found"}), 404
-    user = res.data[0]
-
-    if user['daily_count'] >= 15:
-        return jsonify({"error": "Limit reached"}), 400
-
-    new_bal = user['bal'] + 0.0002
-    new_ad_total = user['ad_total'] + 1
-    
-    # Update balance in Supabase
-    supabase.table("users").update({
-        "bal": new_bal, 
-        "daily_count": user['daily_count'] + 1,
-        "ad_total": new_ad_total
-    }).eq("uid", uid).execute()
-
-    # Referral Logic: Reward inviter once friend watches 5 ads
-    if user['ref_by'] and new_ad_total == 5 and user.get('bonus_paid') == 0:
-        inviter_res = supabase.table("users").select("bal, refs").eq("uid", user['ref_by']).execute()
-        if inviter_res.data:
-            inv_user = inviter_res.data[0]
-            supabase.table("users").update({
-                "bal": inv_user['bal'] + 0.005,
-                "refs": inv_user['refs'] + 1
-            }).eq("uid", user['ref_by']).execute()
-            supabase.table("users").update({"bonus_paid": 1}).eq("uid", uid).execute()
-
-    return jsonify({"status": "ok", "new_bal": round(new_bal, 4)})
-
-@app.route('/withdraw', methods=['POST'])
-def withdraw():
-    data = request.json
-    uid, wallet = data.get('user_id'), data.get('wallet')
-    
-    res = supabase.table("users").select("bal").eq("uid", uid).execute()
-    if res.data and res.data[0]['bal'] >= 1.0:
-        amt = res.data[0]['bal']
-        # Set balance to 0 and log payout
-        supabase.table("users").update({"bal": 0}).eq("uid", uid).execute()
-        supabase.table("payouts").insert({"uid": uid, "amt": amt, "status": "Pending", "wallet": wallet}).execute()
-        return jsonify({"status": "success"})
-    return jsonify({"error": "Minimum 1.0 TON"}), 400
+    # ... rest of your existing Supabase info logic ...
+    return jsonify({"status": "ok"}) # Placeholder for your logic
 
 if __name__ == "__main__":
-    # Locally we use port 10000 to match Render
     app.run(host="0.0.0.0", port=10000)

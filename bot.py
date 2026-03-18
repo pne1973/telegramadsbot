@@ -1,4 +1,4 @@
-import os, requests
+import os, requests, time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client, Client
@@ -6,9 +6,11 @@ from supabase import create_client, Client
 app = Flask(__name__)
 CORS(app)
 
+# CONFIG
 supabase: Client = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
 BOT_TOKEN = "8609038498:AAFzTSVCg2XzwAFsfc8xiA20jEIiPMIxmzc"
 CHANNEL_ID = "-1003836027199"
+ADMIN_ID = "5401881400" 
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -19,56 +21,58 @@ def webhook():
         text = msg.get("text", "")
         ref_by = text.split(" ")[1] if text.startswith("/start ") and len(text.split(" ")) > 1 else None
         
-        # New User Registration
+        # User Registration & Referral
         res = supabase.table("users").select("*").eq("uid", uid).execute()
         if not res.data:
             supabase.table("users").insert({"uid": uid, "bal": 0.0, "referred_by": ref_by}).execute()
             if ref_by and ref_by != uid:
                 r = supabase.table("users").select("bal", "referrals_count").eq("uid", ref_by).execute()
                 if r.data:
-                    supabase.table("users").update({
-                        "bal": r.data[0]['bal'] + 0.001, 
-                        "referrals_count": r.data[0]['referrals_count'] + 1
-                    }).eq("uid", ref_by).execute()
+                    supabase.table("users").update({"bal": r.data[0]['bal'] + 0.001, "referrals_count": r.data[0]['referrals_count'] + 1}).eq("uid", ref_by).execute()
 
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-            "chat_id": uid,
-            "text": "🚀 *Welcome to MyEarn TON!*\nEarn TON by watching ads and inviting friends.",
-            "parse_mode": "Markdown",
+            "chat_id": uid, "text": "🚀 *Welcome!*\nEarn TON by watching ads and inviting friends.", "parse_mode": "Markdown",
             "reply_markup": {"inline_keyboard": [[{"text": "🚀 Open App", "web_app": {"url": "https://pne1973.github.io/mini-app/"}}]]}
         })
     return "OK", 200
 
+@app.route('/broadcast', methods=['POST'])
+def broadcast():
+    data = request.get_json()
+    if str(data.get("admin_id")) != ADMIN_ID: return jsonify({"error": "Unauthorized"}), 403
+    users = supabase.table("users").select("uid").execute().data
+    count = 0
+    for u in users:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": u['uid'], "text": data.get("message"), "parse_mode": "Markdown"})
+        count += 1
+        if count % 20 == 0: time.sleep(1) # Anti-flood delay
+    return jsonify({"total": count})
+
 @app.route('/check_eligibility')
 def check_eligibility():
     uid = request.args.get('user_id')
-    # Channel Check
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={uid}"
-    is_subbed = False
     try:
         r = requests.get(url).json()
         is_subbed = r.get("result", {}).get("status") in ['member', 'administrator', 'creator']
-    except: pass
-
-    # DB Stats
-    u = supabase.table("users").select("*").eq("uid", uid).execute()
-    bal = u.data[0]['bal'] if u.data else 0.0
-    refs = u.data[0]['referrals_count'] if u.data else 0
+    except: is_subbed = False
+    u = supabase.table("users").select("*").eq("uid", uid).execute().data
+    bal = u[0]['bal'] if u else 0.0
+    refs = u[0]['referrals_count'] if u else 0
     return jsonify({"bal": bal, "is_subbed": is_subbed, "ref_count": refs, "eligible": (is_subbed and refs >= 3)})
 
 @app.route('/reward')
 def reward():
     uid = request.args.get('user_id')
-    u = supabase.table("users").select("bal").eq("uid", uid).execute()
-    new_bal = u.data[0]['bal'] + 0.0002
+    u = supabase.table("users").select("bal").eq("uid", uid).execute().data
+    new_bal = u[0]['bal'] + 0.0002
     supabase.table("users").update({"bal": new_bal}).eq("uid", uid).execute()
-    return jsonify({"status": "ok", "new_bal": new_bal})
+    return jsonify({"new_bal": new_bal})
 
 @app.route('/leaderboard')
 def leaderboard():
-    res = supabase.table("users").select("uid", "bal").order("bal", desc=True).limit(10).execute()
-    top = [{"name": str(u['uid'])[:3] + "***" + str(u['uid'])[-2:], "bal": u['bal']} for u in res.data]
-    return jsonify(top)
+    res = supabase.table("users").select("uid", "bal").order("bal", desc=True).limit(10).execute().data
+    return jsonify([{"name": str(u['uid'])[:3]+"***"+str(u['uid'])[-2:], "bal": u['bal']} for u in res])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

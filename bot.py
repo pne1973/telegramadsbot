@@ -3,110 +3,170 @@ import telebot
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
+from datetime import datetime, timedelta
 from threading import Thread
+import time
 
-# --- 1. CONFIGURAÇÃO DE SEGURANÇA (RENDER) ---
-# Vai buscar o Token que colocaste nas Environment Variables do Render
+# --- CONFIGURAÇÃO INICIAL ---
 TOKEN = os.environ.get("BOT_TOKEN")
-
-# Verifica se o token existe e é válido antes de iniciar
-if not TOKEN or ":" not in TOKEN:
-    print("❌ ERRO CRÍTICO: BOT_TOKEN não configurado corretamente no Render!")
-    bot = None
-else:
-    bot = telebot.TeleBot(TOKEN)
-    print("✅ Bot configurado com sucesso!")
-
-# --- 2. CONFIGURAÇÃO DO SUPABASE ---
 S_URL = os.environ.get("SUPABASE_URL")
 S_KEY = os.environ.get("SUPABASE_KEY")
+
+bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
+CORS(app)
 supabase = create_client(S_URL, S_KEY)
 
-# Teu ID de Administrador
 ADMIN_ID = "5401881400"
+WEB_APP_URL = "https://pne1973.github.io/mini-app/"
 
-# --- 3. CONFIGURAÇÃO DO SERVIDOR API (FLASK) ---
-app = Flask(__name__)
-CORS(app) # Permite que o GitHub Pages aceda a estes dados
+# --- MOTOR DE MENSAGENS (TELEGRAM CHAT) ---
 
-@app.route('/')
-def health_check():
-    return "Servidor TON EMPIRE Online 🚀", 200
+@bot.message_handler(commands=['start'])
+def start(message):
+    uid = str(message.from_user.id)
+    username = message.from_user.first_name
+    args = message.text.split()
+    referrer_id = args[1] if len(args) > 1 else None
 
-# Rota para carregar os dados do utilizador no jogo
-@app.route('/check_eligibility', methods=['GET'])
-def check():
+    # Verifica ou Cria Utilizador
+    res = supabase.table("users").select("*").eq("uid", uid).execute()
+    if not res.data:
+        new_user = {
+            "uid": uid, 
+            "referred_by": referrer_id,
+            "balance": 0.0,
+            "last_spin": datetime.now().isoformat()
+        }
+        supabase.table("users").insert(new_user).execute()
+        if referrer_id:
+            supabase.rpc("increment_ref", {"mestre_id": referrer_id}).execute()
+            try: bot.send_message(referrer_id, f"🎊 **Novo Recruta!** {username} juntou-se ao teu império.")
+            except: pass
+
+    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+    btn_play = telebot.types.InlineKeyboardButton("🔱 ENTER THE EMPIRE", web_app=telebot.types.WebAppInfo(url=WEB_APP_URL))
+    btn_news = telebot.types.InlineKeyboardButton("📢 News Channel", url="https://t.me/ton_empire_news")
+    markup.add(btn_play, btn_news)
+
+    welcome_text = (
+        f"💎 **WELCOME TO TON EMPIRE 2026** 💎\n\n"
+        f"Greetings, {username}!\n"
+        "Your path to crypto dominance starts here.\n\n"
+        "🚀 **Level Up** to multiply earnings\n"
+        "🎰 **Spin** to earn real TON\n"
+        "👥 **Invite** friends for Golden Tickets\n\n"
+        "👇 *Enter the command center below:*"
+    )
+    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+
+# --- API DO JOGO (ROTAS DO FRONTEND) ---
+
+@app.route('/sync_data')
+def sync():
     uid = str(request.args.get('user_id'))
-    try:
-        res = supabase.table("users").select("*").eq("uid", uid).execute()
-        if not res.data:
-            user_data = {"uid": uid, "balance": 0.0, "energy": 10, "xp": 0, "level": 1}
-            supabase.table("users").insert(user_data).execute()
-            return jsonify(user_data)
-        return jsonify(res.data[0])
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    res = supabase.table("users").select("*").eq("uid", uid).execute()
+    if not res.data: return jsonify({"error": "User not found"}), 404
+    
+    u = res.data[0]
+    now = datetime.now()
+    
+    # 1. LÓGICA DE AUTO-FARMING (GANHO PASSIVO)
+    # Ganha 0.00005 TON por hora offline, máximo de 3 horas.
+    last_spin = datetime.fromisoformat(u['last_spin'].replace('Z', '+00:00'))
+    hours_away = min(3, (now.replace(tzinfo=None) - last_spin.replace(tzinfo=None)).total_seconds() / 3600)
+    passive_gain = round(hours_away * 0.00005 * u['level'], 6)
+    
+    if passive_gain > 0:
+        new_bal = u['balance'] + passive_gain
+        supabase.table("users").update({"balance": new_bal}).eq("uid", uid).execute()
+        u['balance'] = new_bal
 
-# Rota para dar a recompensa do Spin
+    return jsonify({
+        "user": u,
+        "passive_gain": passive_gain,
+        "server_time": now.isoformat()
+    })
+
 @app.route('/reward_spin', methods=['POST'])
 def reward():
     data = request.get_json()
     uid = str(data.get('user_id'))
-    try:
-        u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
-        if u['energy'] <= 0:
-            return jsonify({"error": "Sem energia"}), 400
-        
-        novo_saldo = round(u['balance'] + 0.0002, 6)
-        nova_energia = u['energy'] - 1
-        
-        supabase.table("users").update({"balance": novo_saldo, "energy": nova_energia}).eq("uid", uid).execute()
-        return jsonify({"win": 0.0002, "new_balance": novo_saldo})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
+    
+    if u['energy'] <= 0: return jsonify({"error": "Energy empty"}), 400
+    
+    # Cálculo Multiplicador (RPG + VIP)
+    multiplier = 1 + (u['level'] * 0.01)
+    if u.get('is_vip'): multiplier *= 1.5
+    
+    win_amount = round(0.00015 * multiplier, 6)
+    new_xp = u['xp'] + 20
+    new_lvl = (new_xp // 100) + 1
+    
+    upd = {
+        "balance": round(u['balance'] + win_amount, 6),
+        "energy": u['energy'] - 1,
+        "xp": new_xp,
+        "level": new_lvl,
+        "last_spin": datetime.now().isoformat()
+    }
+    supabase.table("users").update(upd).eq("uid", uid).execute()
+    return jsonify({"win": win_amount, "new_bal": upd['balance'], "lvl_up": new_lvl > u['level']})
 
-# Rota para o Painel de Admin (Cálculo de Dívida e Users)
-@app.route('/admin_stats')
+@app.route('/daily_bonus', methods=['POST'])
+def daily():
+    uid = str(request.get_json().get('user_id'))
+    u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
+    
+    now = datetime.now()
+    last = datetime.fromisoformat(u['last_checkin']) if u['last_checkin'] else datetime.min
+    
+    if (now - last.replace(tzinfo=None)) < timedelta(days=1):
+        return jsonify({"error": "Already claimed today"}), 400
+        
+    supabase.table("users").update({"energy": 10, "last_checkin": now.isoformat()}).eq("uid", uid).execute()
+    return jsonify({"success": True})
+
+# --- PAINEL ADMIN AVANÇADO ---
+
+@app.route('/admin_master_stats')
 def admin_stats():
     uid = request.args.get('user_id')
-    if uid != ADMIN_ID:
-        return jsonify({"error": "Não autorizado"}), 403
+    if uid != ADMIN_ID: return "Unauthorized", 403
     
-    try:
-        users = supabase.table("users").select("balance").execute()
-        total_users = len(users.data)
-        total_debt = sum(x['balance'] for x in users.data)
-        return jsonify({"total_users": total_users, "debt": round(total_debt, 4)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    users = supabase.table("users").select("balance").execute()
+    total_debt = sum(u['balance'] for u in users.data)
+    
+    return jsonify({
+        "total_players": len(users.data),
+        "total_debt": round(total_debt, 4),
+        "server_status": "OPTIMIZED",
+        "payouts_pending": 0 # Pode ser ligado a uma tabela de 'payouts'
+    })
 
-# --- 4. LÓGICA DO TELEGRAM (MENU INICIAL) ---
-if bot:
-    @bot.message_handler(commands=['start'])
-    def send_welcome(message):
-        # Link do teu frontend no GitHub Pages
-        web_app_url = "https://pne1973.github.io/mini-app/"
-        
-        markup = telebot.types.InlineKeyboardMarkup()
-        btn = telebot.types.InlineKeyboardButton("🎮 JOGAR AGORA", web_app=telebot.types.WebAppInfo(url=web_app_url))
-        markup.add(btn)
-        
-        texto = (
-            "💎 **BEM-VINDO AO TON EMPIRE 2026**\n\n"
-            "Ganhe TON real assistindo anúncios e subindo de nível!\n\n"
-            "👇 Clique no botão abaixo para abrir o jogo:"
-        )
-        bot.send_message(message.chat.id, texto, parse_mode="Markdown", reply_markup=markup)
+@app.route('/admin_broadcast', methods=['POST'])
+def broadcast():
+    data = request.get_json()
+    if str(data.get('admin_id')) != ADMIN_ID: return "Forbidden", 403
+    
+    msg = data.get('message')
+    users = supabase.table("users").select("uid").execute()
+    
+    count = 0
+    for u in users.data:
+        try:
+            bot.send_message(u['uid'], f"📢 **EMPIRE NEWS:**\n\n{msg}", parse_mode="Markdown")
+            count += 1
+            time.sleep(0.05) # Evita spam block do Telegram
+        except: pass
+    return jsonify({"sent_to": count})
 
-# --- 5. EXECUÇÃO SIMULTÂNEA (BOT + API) ---
+# --- INICIALIZAÇÃO ---
 def run_bot():
-    if bot:
-        bot.infinity_polling()
+    bot.infinity_polling()
 
 if __name__ == "__main__":
-    # Inicia o bot numa linha separada (Thread)
+    # Roda o Bot e o Flask juntos
     Thread(target=run_bot).start()
-    
-    # Inicia o servidor na porta que o Render exige
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))

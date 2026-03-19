@@ -4,7 +4,7 @@ from flask_cors import CORS
 from supabase import create_client
 from threading import Thread
 
-# --- CONFIGURAÇÕES ---
+# Configurações de Ambiente
 TOKEN = os.environ.get("BOT_TOKEN")
 S_URL = os.environ.get("SUPABASE_URL")
 S_KEY = os.environ.get("SUPABASE_KEY")
@@ -13,7 +13,7 @@ ADMIN_ID = "5401881400"
 bot = telebot.TeleBot(TOKEN)
 supabase = create_client(S_URL, S_KEY)
 app = Flask(__name__)
-CORS(app)
+CORS(app) # Permite que o GitHub Pages fale com o Render
 
 @app.route('/check_eligibility')
 def check():
@@ -22,10 +22,7 @@ def check():
     res = supabase.table("users").select("*").eq("uid", uid).execute()
     
     if not res.data:
-        data = {
-            "uid": uid, "balance": 0.0, "energy": 10, "xp": 0, "level": 1, 
-            "last_regen": int(time.time()), "referred_by": ref_by
-        }
+        data = {"uid": uid, "balance": 0.0, "energy": 10, "xp": 0, "level": 1, "last_regen": int(time.time()), "referred_by": ref_by}
         supabase.table("users").insert(data).execute()
         return jsonify(data)
     
@@ -44,7 +41,9 @@ def check():
 @app.route('/reward_spin', methods=['POST'])
 def reward():
     uid = str(request.json.get('user_id'))
-    u = supabase.table("users").select("*").eq("uid", uid).execute().data[0]
+    u_req = supabase.table("users").select("*").eq("uid", uid).execute()
+    if not u_req.data: return jsonify({"error": "User not found"}), 404
+    u = u_req.data[0]
     
     if u['energy'] <= 0: return jsonify({"error": "Sem energia!"}), 400
     
@@ -55,16 +54,13 @@ def reward():
         new_lvl += 1
     
     new_bal = round(u['balance'] + 0.0002, 6)
-    supabase.table("users").update({
-        "balance": new_bal, "energy": u['energy'] - 1, 
-        "xp": new_xp, "level": new_lvl, "last_regen": int(time.time())
-    }).eq("uid", uid).execute()
+    supabase.table("users").update({"balance": new_bal, "energy": u['energy'] - 1, "xp": new_xp, "level": new_lvl, "last_regen": int(time.time())}).eq("uid", uid).execute()
 
+    # Bónus de Referral (10%)
     if u.get('referred_by') and u['referred_by'] != "None":
         padrinho = supabase.table("users").select("balance").eq("uid", u['referred_by']).execute()
         if padrinho.data:
-            bonus = 0.00002
-            novo_bal_pad = round(padrinho.data[0]['balance'] + bonus, 6)
+            novo_bal_pad = round(padrinho.data[0]['balance'] + 0.00002, 6)
             supabase.table("users").update({"balance": novo_bal_pad}).eq("uid", u['referred_by']).execute()
 
     return jsonify({"balance": new_bal, "energy": u['energy']-1, "xp": new_xp, "level": new_lvl})
@@ -82,28 +78,15 @@ def ads_energy():
 def withdraw():
     uid = str(request.json.get('user_id'))
     u = supabase.table("users").select("balance").eq("uid", uid).execute().data[0]
-    
-    # TRAVA DE REFERRAL: Conta amigos convidados
     friends = supabase.table("users").select("uid").eq("referred_by", uid).execute()
-    count = len(friends.data)
-    
-    if count < 3:
-        return jsonify({"error": f"Bloqueio: Precisas de 3 convites. Tens: {count}/3"}), 403
-    if u['balance'] < 0.5: 
-        return jsonify({"error": "Mínimo 0.5 TON."}), 400
-        
-    return jsonify({"success": "Pedido em análise! Processamento em 24h."})
+    if len(friends.data) < 3: return jsonify({"error": f"Precisas de 3 convites. Tens: {len(friends.data)}/3"}), 403
+    if u['balance'] < 0.5: return jsonify({"error": "Mínimo 0.5 TON."}), 400
+    return jsonify({"success": "Pedido enviado!"})
 
 @app.route('/get_leaderboard')
 def leaderboard():
     res = supabase.table("users").select("uid, balance").order("balance", desc=True).limit(5).execute()
     return jsonify(res.data)
-
-@app.route('/admin_stats')
-def admin():
-    if str(request.args.get('user_id')) != ADMIN_ID: return "Negado", 403
-    users = supabase.table("users").select("balance").execute()
-    return jsonify({"total_users": len(users.data), "debt": sum(u['balance'] for u in users.data)})
 
 if __name__ == "__main__":
     Thread(target=lambda: bot.infinity_polling()).start()

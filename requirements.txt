@@ -1,5 +1,5 @@
+pyTelegramBotAPI
 flask
 flask-cors
 supabase
-pyTelegramBotAPI
 gunicorn
